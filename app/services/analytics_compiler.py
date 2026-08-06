@@ -58,8 +58,8 @@ class AnalyticsCompilerService:
             dashboard_doc.model_dump(by_alias=True),
             upsert=True
         )
-        # Cache in Redis (60s TTL)
-        await self.redis.set("analytics_dashboard_main", dashboard_doc.model_dump_json(by_alias=True), ex=60)
+        # Cache in Redis (24h TTL)
+        await self.redis.set("analytics_dashboard_main", dashboard_doc.model_dump_json(by_alias=True), ex=86400)
 
         ai_doc = await self.compile_ai_recommendations()
         # Save to Mongo
@@ -68,8 +68,8 @@ class AnalyticsCompilerService:
             ai_doc.model_dump(by_alias=True),
             upsert=True
         )
-        # Cache in Redis (60s TTL)
-        await self.redis.set("analytics_ai_recommendations", ai_doc.model_dump_json(by_alias=True), ex=60)
+        # Cache in Redis (24h TTL)
+        await self.redis.set("analytics_ai_recommendations", ai_doc.model_dump_json(by_alias=True), ex=86400)
 
         logger.info("APEX Analytics Compilation Completed Successfully!")
 

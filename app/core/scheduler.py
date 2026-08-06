@@ -23,12 +23,19 @@ async def periodic_compile_job() -> None:
         logger.error("Failed to execute scheduled compilation: %s", ex)
 
 
+from apscheduler.triggers.cron import CronTrigger
+
 def start_scheduler() -> None:
     if not scheduler.running:
-        # Schedule periodic compilation every 30 minutes
-        scheduler.add_job(periodic_compile_job, "interval", minutes=30, id="periodic_analytics_compile")
+        # Schedule automatic recompilation daily at 11:00 PM (23:00)
+        scheduler.add_job(
+            periodic_compile_job,
+            CronTrigger(hour=23, minute=0),
+            id="daily_11pm_analytics_compile",
+            replace_existing=True,
+        )
         scheduler.start()
-        logger.info("APScheduler started with periodic_analytics_compile job.")
+        logger.info("APScheduler started with daily_11pm_analytics_compile job (triggers at 11:00 PM).")
 
 
 def stop_scheduler() -> None:

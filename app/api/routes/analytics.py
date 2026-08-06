@@ -42,7 +42,7 @@ async def get_dashboard_stats(
         doc_dict = await db["DashboardStats"].find_one({"_id": "dashboard_main"})
         if doc_dict:
             doc = DashboardStatsDocument.model_validate(doc_dict)
-            await redis.set("analytics_dashboard_main", doc.model_dump_json(by_alias=True), ex=60)
+            await redis.set("analytics_dashboard_main", doc.model_dump_json(by_alias=True), ex=86400)
             return ApiResponse.success_response(doc, "Dashboard analytics fetched from MongoDB")
     except Exception as ex:
         logger.warning("MongoDB read error: %s", ex)
@@ -73,7 +73,7 @@ async def get_ai_recommendations(
         doc_dict = await db["AiRecommendations"].find_one({"_id": "ai_recommendations"})
         if doc_dict:
             doc = AiRecommendationDocument.model_validate(doc_dict)
-            await redis.set("analytics_ai_recommendations", doc.model_dump_json(by_alias=True), ex=60)
+            await redis.set("analytics_ai_recommendations", doc.model_dump_json(by_alias=True), ex=86400)
             return ApiResponse.success_response(doc, "AI recommendations fetched from MongoDB")
     except Exception as ex:
         logger.warning("MongoDB read error: %s", ex)
