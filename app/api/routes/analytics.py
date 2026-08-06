@@ -50,6 +50,15 @@ async def get_dashboard_stats(
     # 3. Live compile fallback from PostgreSQL
     compiler = AnalyticsCompilerService(mongo_db=db, redis_client=redis)
     compiled = await compiler.compile_dashboard_stats()
+    try:
+        await db["DashboardStats"].replace_one(
+            {"_id": "dashboard_main"},
+            compiled.model_dump(by_alias=True),
+            upsert=True
+        )
+        await redis.set("analytics_dashboard_main", compiled.model_dump_json(by_alias=True), ex=86400)
+    except Exception as ex:
+        logger.warning("Failed to persist live compiled dashboard stats: %s", ex)
     return ApiResponse.success_response(compiled, "Dashboard analytics generated live from PostgreSQL Read-Only")
 
 

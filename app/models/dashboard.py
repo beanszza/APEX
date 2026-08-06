@@ -76,6 +76,18 @@ class BranchDeliveryVolumeDto(BaseCamelModel):
     total_items_transferred: float = 0.0
 
 
+class PoFulfillmentBreakdownDto(BaseCamelModel):
+    completed_count: int = 0
+    arrived_count: int = 0
+    pending_count: int = 0
+    rejected_count: int = 0
+    completed_percent: float = 0.0
+    arrived_percent: float = 0.0
+    pending_percent: float = 0.0
+    rejected_percent: float = 0.0
+    total_pos: int = 0
+
+
 class DashboardStatsDocument(BaseCamelModel):
     id: str = Field(default="dashboard_main", alias="_id")
     last_compiled_at: datetime = Field(default_factory=datetime.utcnow)
@@ -83,6 +95,7 @@ class DashboardStatsDocument(BaseCamelModel):
     inventory_chart: list[CategoryStockDto] = Field(default_factory=list)
     procurement_chart: list[MonthlyProcurementDto] = Field(default_factory=list)
     production_chart: ProductionChartDto = Field(default_factory=ProductionChartDto)
+    po_fulfillment: PoFulfillmentBreakdownDto = Field(default_factory=PoFulfillmentBreakdownDto)
     supplier_chart: list[SupplierPerformanceChartDto] = Field(default_factory=list)
     distribution_chart: list[BranchTransferChartDto] = Field(default_factory=list)
     low_stock_alerts: list[LowStockAlertDto] = Field(default_factory=list)

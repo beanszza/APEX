@@ -5,7 +5,7 @@ via Pandas/Scikit-Learn, and persists results to MongoDB and Redis cache.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 from sqlalchemy import text
@@ -19,6 +19,7 @@ from app.models.dashboard import (
     CategoryStockDto,
     MonthlyProcurementDto,
     ProductionChartDto,
+    PoFulfillmentBreakdownDto,
     LowStockAlertDto,
     ProductProductionFrequencyDto,
     BranchDeliveryVolumeDto,
@@ -58,8 +59,12 @@ class AnalyticsCompilerService:
             dashboard_doc.model_dump(by_alias=True),
             upsert=True
         )
-        # Cache in Redis (24h TTL)
-        await self.redis.set("analytics_dashboard_main", dashboard_doc.model_dump_json(by_alias=True), ex=86400)
+        # Cache in Redis (24h TTL if available)
+        try:
+            if self.redis:
+                await self.redis.set("analytics_dashboard_main", dashboard_doc.model_dump_json(by_alias=True), ex=86400)
+        except Exception as ex:
+            logger.warning("Redis cache write skipped: %s", ex)
 
         ai_doc = await self.compile_ai_recommendations()
         # Save to Mongo
@@ -68,8 +73,12 @@ class AnalyticsCompilerService:
             ai_doc.model_dump(by_alias=True),
             upsert=True
         )
-        # Cache in Redis (24h TTL)
-        await self.redis.set("analytics_ai_recommendations", ai_doc.model_dump_json(by_alias=True), ex=86400)
+        # Cache in Redis (24h TTL if available)
+        try:
+            if self.redis:
+                await self.redis.set("analytics_ai_recommendations", ai_doc.model_dump_json(by_alias=True), ex=86400)
+        except Exception as ex:
+            logger.warning("Redis cache write skipped: %s", ex)
 
         logger.info("APEX Analytics Compilation Completed Successfully!")
 
@@ -85,12 +94,12 @@ class AnalyticsCompilerService:
         """)
 
         po_df = self._fetch_table_as_df("""
-            SELECT po."PurchaseOrderId", po."OrderDate", po."Status", po."SupplierId",
-                   s."SupplierName", COALESCE(SUM(poi."PoItemQuantity"), 0) as total_qty
+            SELECT po."PoId", po."OrderDate", po."Status", po."SupplierId",
+                   s."CompanyName" as "SupplierName", COALESCE(SUM(poi."PoItemQuantity"), 0) as total_qty
             FROM "PurchaseOrders" po
             LEFT JOIN "Suppliers" s ON po."SupplierId" = s."SupplierId"
-            LEFT JOIN "PurchaseOrderItems" poi ON po."PurchaseOrderId" = poi."PurchaseOrderId"
-            GROUP BY po."PurchaseOrderId", po."OrderDate", po."Status", po."SupplierId", s."SupplierName"
+            LEFT JOIN "PurchaseOrderItems" poi ON po."PoId" = poi."PoId"
+            GROUP BY po."PoId", po."OrderDate", po."Status", po."SupplierId", s."CompanyName"
         """)
 
         batches_df = self._fetch_table_as_df("""
@@ -98,7 +107,7 @@ class AnalyticsCompilerService:
                    b."ActualQuantity", b."EstimatedQuantity", r."RecipeName", i."ItemName"
             FROM "ProductionBatches" b
             LEFT JOIN "Recipes" r ON b."RecipeId" = r."RecipeId"
-            LEFT JOIN "FinishedProducts" fp ON b."ProductId" = fp."FinishedProductId"
+            LEFT JOIN "FinishedProducts" fp ON b."ProductId" = fp."ProductId"
             LEFT JOIN "Items" i ON fp."ItemId" = i."ItemId"
         """)
 
@@ -110,7 +119,7 @@ class AnalyticsCompilerService:
         """)
 
         suppliers_df = self._fetch_table_as_df("""
-            SELECT "SupplierId", "SupplierName" FROM "Suppliers" WHERE "IsActive" = true
+            SELECT "SupplierId", "CompanyName" as "SupplierName" FROM "Suppliers" WHERE "IsActive" = true
         """)
 
         # 2. Compute KPIs
@@ -183,7 +192,7 @@ class AnalyticsCompilerService:
             po_df["OrderDate"] = pd.to_datetime(po_df["OrderDate"], errors="coerce")
             po_df["MonthStr"] = po_df["OrderDate"].dt.strftime("%b %Y")
             proc_grouped = po_df.groupby("MonthStr").agg(
-                total_orders=("PurchaseOrderId", "count"),
+                total_orders=("PoId", "count"),
                 total_qty=("total_qty", "sum")
             ).reset_index().head(6)
 
@@ -236,13 +245,45 @@ class AnalyticsCompilerService:
                     total_items_transferred=float(r["total_transferred"])
                 ))
 
+        # 5b. PO Fulfillment Breakdown
+        completed_cnt = 0
+        arrived_cnt = 0
+        pending_cnt = 0
+        rejected_cnt = 0
+        total_pos = len(po_df) if not po_df.empty else 0
+
+        if total_pos > 0 and "Status" in po_df.columns:
+            statuses = po_df["Status"].astype(str).str.lower()
+            completed_cnt = int(statuses.str.contains("completed|received|fulfilled").sum())
+            arrived_cnt = int(statuses.str.contains("arrived|inspected|qa").sum())
+            pending_cnt = int(statuses.str.contains("pending|issued|ordered").sum())
+            rejected_cnt = int(statuses.str.contains("rejected|cancelled|failed").sum())
+
+        comp_pct = round((completed_cnt / total_pos * 100.0), 1) if total_pos > 0 else (100.0 if completed_cnt > 0 else 100.0)
+        arr_pct = round((arrived_cnt / total_pos * 100.0), 1) if total_pos > 0 else 0.0
+        pend_pct = round((pending_cnt / total_pos * 100.0), 1) if total_pos > 0 else 0.0
+        rej_pct = round((rejected_cnt / total_pos * 100.0), 1) if total_pos > 0 else 0.0
+
+        po_fulfillment = PoFulfillmentBreakdownDto(
+            completed_count=completed_cnt,
+            arrived_count=arrived_cnt,
+            pending_count=pending_cnt,
+            rejected_count=rejected_cnt,
+            completed_percent=comp_pct,
+            arrived_percent=arr_pct,
+            pending_percent=pend_pct,
+            rejected_percent=rej_pct,
+            total_pos=total_pos,
+        )
+
         return DashboardStatsDocument(
             id="dashboard_main",
-            last_compiled_at=datetime.utcnow(),
+            last_compiled_at=datetime.now(timezone.utc),
             kpis=kpis,
             inventory_chart=inventory_chart,
             procurement_chart=procurement_chart,
             production_chart=production_chart,
+            po_fulfillment=po_fulfillment,
             low_stock_alerts=low_stock_alerts,
             frequently_produced_products=freq_products,
             branch_deliveries=branch_deliveries,

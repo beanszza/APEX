@@ -30,6 +30,19 @@ async def lifespan(app: FastAPI):
 
     start_scheduler()
 
+    # Trigger background compilation on APEX startup so Redis/MongoDB are instantly populated
+    try:
+        from app.db.mongo import get_database
+        from app.db.redis import get_redis_client
+        from app.services.analytics_compiler import AnalyticsCompilerService
+        mongo_db = get_database()
+        redis_cl = get_redis_client()
+        compiler = AnalyticsCompilerService(mongo_db=mongo_db, redis_client=redis_cl)
+        await compiler.compile_all_analytics()
+        logger.info("APEX initial analytics compilation complete on startup.")
+    except Exception as ex:
+        logger.warning("Notice: APEX startup analytics compilation skipped/failed: %s", ex)
+
     yield
 
     # Shutdown
