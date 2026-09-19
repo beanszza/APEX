@@ -7,10 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import get_scalar_api_reference
 
 from app.core.config import get_settings
-from app.db.mongo import connect_mongo, close_mongo
-from app.db.redis import connect_redis, close_redis
-from app.db.postgres import close_pg
+from app.db.postgres import ensure_analytics_table, close_pg
 from app.core.scheduler import start_scheduler, stop_scheduler
+from app.core.rate_limiter import RateLimitMiddleware
 from app.api.routes.analytics import router as analytics_router
 
 logging.basicConfig(level=logging.INFO)
@@ -19,25 +18,18 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-
-    # Startup
-    logger.info("Connecting to MongoDB at %s", settings.mongo_uri)
-    await connect_mongo(settings.mongo_uri, settings.mongo_database)
-
-    logger.info("Connecting to Redis at %s", settings.redis_url)
-    await connect_redis(settings.redis_url)
+    # Startup: ensure PostgreSQL analytics_documents table exists
+    try:
+        ensure_analytics_table()
+    except Exception as ex:
+        logger.warning("Notice: Could not verify analytics_documents table on startup (PostgreSQL might be starting up): %s", ex)
 
     start_scheduler()
 
-    # Trigger background compilation on APEX startup so Redis/MongoDB are instantly populated
+    # Trigger background compilation on APEX startup to populate analytics
     try:
-        from app.db.mongo import get_database
-        from app.db.redis import get_redis_client
         from app.services.analytics_compiler import AnalyticsCompilerService
-        mongo_db = get_database()
-        redis_cl = get_redis_client()
-        compiler = AnalyticsCompilerService(mongo_db=mongo_db, redis_client=redis_cl)
+        compiler = AnalyticsCompilerService()
         await compiler.compile_all_analytics()
         logger.info("APEX initial analytics compilation complete on startup.")
     except Exception as ex:
@@ -47,8 +39,6 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     stop_scheduler()
-    await close_redis()
-    await close_mongo()
     close_pg()
     logger.info("APEX shutdown complete.")
 
@@ -74,6 +64,17 @@ cors_origins = [
     "http://127.0.0.1:5001",
 ]
 
+settings = get_settings()
+if settings.allowed_origins:
+    for origin in settings.allowed_origins.split(","):
+        stripped = origin.strip()
+        if stripped and stripped not in cors_origins:
+            cors_origins.append(stripped)
+
+# Add Rate Limiting Middleware
+app.add_middleware(RateLimitMiddleware)
+
+# Add CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -87,6 +88,9 @@ app.include_router(analytics_router)
 
 @app.get("/docs", include_in_schema=False)
 async def scalar_docs():
+    if not get_settings().is_development:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Not found")
     return get_scalar_api_reference(
         openapi_url=app.openapi_url,
         title=app.title,

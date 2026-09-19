@@ -25,9 +25,6 @@ def get_current_user_claims(
         token = request.cookies.get("erp_access_token") or request.cookies.get("customer_access_token")
 
     if not token:
-        # In development mode, return a default mock principal if unauthenticated
-        if settings.is_development:
-            return {"sub": "dev-user", "role": "Admin"}
         raise HTTPException(status_code=401, detail="Authentication token required.")
 
     try:

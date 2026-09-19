@@ -25,7 +25,7 @@ class ProductionAiRecommendationDto(BaseCamelModel):
 
 
 class AiRecommendationDocument(BaseCamelModel):
-    id: str = Field(default="ai_recommendations", alias="_id")
+    id: str = Field(default="ai_recommendations")
     last_compiled_at: datetime = Field(default_factory=datetime.utcnow)
     model_type: str = "Scikit-learn Linear Regression & Demand Velocity Engine"
     procurement_recommendations: list[ProcurementAiRecommendationDto] = Field(default_factory=list)

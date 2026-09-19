@@ -1,7 +1,7 @@
 """Core Analytics Compiler Service for APEX.
 
 Performs read-only extraction from PostgreSQL (scm_db), computes KPIs & ML insights
-via Pandas/Scikit-Learn, and persists results to MongoDB and Redis cache.
+via Pandas/Scikit-Learn, and persists results to PostgreSQL analytics_documents table and memory cache.
 """
 
 import logging
@@ -9,10 +9,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 from sqlalchemy import text
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from redis.asyncio import Redis
 
-from app.db.postgres import get_pg_engine
+from app.db.postgres import get_pg_engine, save_document, cache_set
 from app.models.dashboard import (
     DashboardStatsDocument,
     DashboardKpiDto,
@@ -30,14 +28,13 @@ from app.models.recommendations import (
     ProductionAiRecommendationDto,
 )
 from app.ml.demand_forecaster import DemandForecaster
+from app.core.security import sanitize_text
 
 logger = logging.getLogger(__name__)
 
 
 class AnalyticsCompilerService:
-    def __init__(self, mongo_db: AsyncIOMotorDatabase, redis_client: Redis) -> None:
-        self.mongo_db = mongo_db
-        self.redis = redis_client
+    def __init__(self) -> None:
         self.forecaster = DemandForecaster()
 
     def _fetch_table_as_df(self, query: str) -> pd.DataFrame:
@@ -50,35 +47,25 @@ class AnalyticsCompilerService:
             return pd.DataFrame()
 
     async def compile_all_analytics(self) -> None:
-        logger.info("Starting APEX Analytics Compilation (Read-Only PostgreSQL -> MongoDB & Redis)...")
+        logger.info("Starting APEX Analytics Compilation (PostgreSQL -> analytics_documents table)...")
         
         dashboard_doc = await self.compile_dashboard_stats()
-        # Save to Mongo
-        await self.mongo_db["DashboardStats"].replace_one(
-            {"_id": "dashboard_main"},
-            dashboard_doc.model_dump(by_alias=True),
-            upsert=True
-        )
-        # Cache in Redis (24h TTL if available)
+        dash_json = dashboard_doc.model_dump_json(by_alias=True)
+        # Save to PostgreSQL analytics_documents table
         try:
-            if self.redis:
-                await self.redis.set("analytics_dashboard_main", dashboard_doc.model_dump_json(by_alias=True), ex=86400)
+            save_document("dashboard_main", dash_json)
+            cache_set("analytics_dashboard_main", dash_json, ttl_seconds=86400)
         except Exception as ex:
-            logger.warning("Redis cache write skipped: %s", ex)
+            logger.error("Failed to save dashboard stats: %s", ex)
 
         ai_doc = await self.compile_ai_recommendations()
-        # Save to Mongo
-        await self.mongo_db["AiRecommendations"].replace_one(
-            {"_id": "ai_recommendations"},
-            ai_doc.model_dump(by_alias=True),
-            upsert=True
-        )
-        # Cache in Redis (24h TTL if available)
+        ai_json = ai_doc.model_dump_json(by_alias=True)
+        # Save to PostgreSQL analytics_documents table
         try:
-            if self.redis:
-                await self.redis.set("analytics_ai_recommendations", ai_doc.model_dump_json(by_alias=True), ex=86400)
+            save_document("ai_recommendations", ai_json)
+            cache_set("analytics_ai_recommendations", ai_json, ttl_seconds=86400)
         except Exception as ex:
-            logger.warning("Redis cache write skipped: %s", ex)
+            logger.error("Failed to save AI recommendations: %s", ex)
 
         logger.info("APEX Analytics Compilation Completed Successfully!")
 
@@ -309,9 +296,10 @@ class AnalyticsCompilerService:
             for _, r in predicted_df.iterrows():
                 usage = float(r.get("predicted_monthly_usage", 15.0))
                 reorder = float(r.get("recommended_reorder_qty", 50.0))
+                clean_name = sanitize_text(str(r["ItemName"]))
                 procurement_recs.append(ProcurementAiRecommendationDto(
                     item_id=int(r["ItemId"]),
-                    item_name=str(r["ItemName"]),
+                    item_name=clean_name,
                     current_stock=float(r["current_stock"]),
                     predicted_monthly_usage=usage,
                     recommended_reorder_qty=reorder,
@@ -324,9 +312,10 @@ class AnalyticsCompilerService:
             for _, r in recipes_df.iterrows():
                 out_qty = int(r["OutputQuantity"]) if pd.notna(r["OutputQuantity"]) and r["OutputQuantity"] > 0 else 100
                 batches = max(2, 200 // out_qty)
+                clean_recipe = sanitize_text(str(r["RecipeName"]))
                 production_recs.append(ProductionAiRecommendationDto(
                     recipe_id=int(r["RecipeId"]),
-                    recipe_name=str(r["RecipeName"]),
+                    recipe_name=clean_recipe,
                     recommended_batch_count=batches,
                     recommended_output_qty=batches * out_qty,
                     confidence="High",

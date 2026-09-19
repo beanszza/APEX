@@ -89,7 +89,7 @@ class PoFulfillmentBreakdownDto(BaseCamelModel):
 
 
 class DashboardStatsDocument(BaseCamelModel):
-    id: str = Field(default="dashboard_main", alias="_id")
+    id: str = Field(default="dashboard_main")
     last_compiled_at: datetime = Field(default_factory=datetime.utcnow)
     kpis: DashboardKpiDto = Field(default_factory=DashboardKpiDto)
     inventory_chart: list[CategoryStockDto] = Field(default_factory=list)

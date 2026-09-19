@@ -17,7 +17,7 @@ An AI-powered supply chain analytics and intelligence engine for SCMS.
 
 ## Overview
 
-APEX is a standalone Python microservice that provides **predictive analytics**, **dashboard intelligence**, and **ML-driven recommendations** for the Supply Chain Management System (SCMS). It runs as an independent service alongside the existing `api-scms` backend, reading operational data from PostgreSQL and persisting computed analytics in its own MongoDB instance.
+APEX is a standalone Python microservice that provides **predictive analytics**, **dashboard intelligence**, and **ML-driven recommendations** for the Supply Chain Management System (SCMS). It runs alongside the existing `api-scms` backend, reading operational data from PostgreSQL and persisting computed analytics in the dedicated `analytics_documents` table in PostgreSQL (`scm_db`), with fast in-memory caching.
 
 | Capability | Description | Tech |
 |------------|-------------|------|
@@ -29,7 +29,7 @@ APEX is a standalone Python microservice that provides **predictive analytics**,
 
 ## Architecture
 
-APEX follows the **read-only consumer** pattern — it reads from the SCMS PostgreSQL database but never writes to it. All computed analytics are stored in its own MongoDB database and cached in Redis.
+APEX extracts data from the SCMS PostgreSQL database (`scm_db`), runs predictive and analytics pipelines, and persists compiled documents into the `analytics_documents` table in the same PostgreSQL database, accompanied by in-memory caching.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -51,16 +51,12 @@ APEX follows the **read-only consumer** pattern — it reads from the SCMS Postg
 │                       │   PostgreSQL     │     │         │
 │                       │   scm_db         │     │         │
 │                       └────────┬─────────┘     │         │
-│                                │ READ-ONLY     │         │
+│                                │ READ/WRITE    │         │
+│                                │ (analytics)   │         │
 │                       ┌────────▼─────────┐     │         │
 │                       │   APEX   :5011   │◄────┘         │
-│                       │   (this repo)    │               │
-│                       └──┬───────────┬───┘               │
-│                          │           │                   │
-│                 ┌────────▼───┐  ┌────▼──────┐            │
-│                 │  MongoDB   │  │  Redis    │            │
-│                 │  apex_db   │  │  cache    │            │
-│                 └────────────┘  └───────────┘            │
+│                       │   (Python AI)    │               │
+│                       └──────────────────┘               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -68,14 +64,12 @@ APEX follows the **read-only consumer** pattern — it reads from the SCMS Postg
 
 | Connection | Direction | Method | Purpose |
 |------------|-----------|--------|---------|
-| APEX → PostgreSQL (`scm_db`) | **Read-only** | SQLAlchemy `pd.read_sql()` | Pull items, POs, batches, transfers, suppliers |
-| APEX → MongoDB (`apex_db`) | **Read + Write** | Motor (async) | Store compiled dashboard stats + AI recommendations |
-| APEX → Redis | **Read + Write** | redis-py (async) | Cache analytics with TTL (60s) |
+| APEX → PostgreSQL (`scm_db`) | **Read + Write** | SQLAlchemy | Read operational data; save compiled analytics into `analytics_documents` |
 | api-gateway → APEX | **Inbound HTTP** | YARP route `/api/scms-analytics/*` | Frontend requests routed through gateway |
 | web-scms → APEX | **Inbound HTTP** | `fetch()` calls | Dashboard + AI recommendation endpoints |
 | ms-authentication → APEX | **None** (shared JWT secret) | JWT validation | APEX validates tokens using the same `JWT_SECRET` |
 
-> **Key principle:** APEX never writes to PostgreSQL, never calls api-scms, and never talks to ms-authentication. It operates independently.
+> **Key principle:** APEX does not modify existing operational tables in PostgreSQL (`Items`, `PurchaseOrders`, etc.). It stores only into `analytics_documents`.
 
 ## Tech Stack
 
@@ -84,9 +78,8 @@ APEX follows the **read-only consumer** pattern — it reads from the SCMS Postg
 | **Framework** | FastAPI (async Python) |
 | **Data Processing** | Pandas, NumPy |
 | **Machine Learning** | Scikit-learn (regression, classification, forecasting) |
-| **Primary Database** | MongoDB 7+ (analytics persistence) |
-| **Cache** | Redis 7+ (TTL-based response caching) |
-| **Data Source** | PostgreSQL 15+ (read-only access to `scm_db`) |
+| **Database** | PostgreSQL 15+ (`scm_db` — operational reads + `analytics_documents` writes) |
+| **Cache** | In-Memory (TTL-based caching) |
 | **Server** | Uvicorn (ASGI) |
 | **Validation** | Pydantic v2 + pydantic-settings |
 | **HTTP Client** | httpx (async) |
@@ -96,8 +89,6 @@ APEX follows the **read-only consumer** pattern — it reads from the SCMS Postg
 
 - [Python](https://www.python.org/) 3.12+
 - [PostgreSQL](https://www.postgresql.org/) 15+ — the `scm_db` database must exist (created by `api-scms`)
-- [MongoDB](https://www.mongodb.com/) 7+ — running on localhost:27017
-- [Redis](https://redis.io/) 7+ — running on localhost:6379
 
 ## Installation & Setup
 

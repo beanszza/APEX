@@ -14,9 +14,10 @@ class Settings(BaseSettings):
     )
 
     # App
-    app_env: str = "development"
+    app_env: str = "production"
     app_host: str = "0.0.0.0"
     app_port: int = 5011
+    allowed_origins: str = ""
 
     # PostgreSQL (Read-Only access to scm_db)
     postgres_host: str = "localhost"
@@ -24,13 +25,6 @@ class Settings(BaseSettings):
     postgres_db: str = "scm_db"
     postgres_user: str = "postgres"
     postgres_password: str = "password"
-
-    # MongoDB (APEX persistent analytics DB)
-    mongo_uri: str = "mongodb://localhost:27017"
-    mongo_database: str = "apex_db"
-
-    # Redis (Cache)
-    redis_url: str = "redis://localhost:6379/0"
 
     # JWT Authentication (shared secret with ms-authentication)
     jwt_secret: str = "SuperSecretKeyForDevelopmentPurposesThatIsAtLeast32BytesLong!"
